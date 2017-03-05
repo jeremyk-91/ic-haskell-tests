@@ -99,16 +99,27 @@ partitionOnAttAccumulator attribute (header, row : rows) accumulator
     constructKey attribute header row = (lookUpAtt (fst attribute) header row, row)
 
 --------------------------------------------------------------------
--- PART II
+-- PART II (START 16.59, FINISH 17.14 - 15 minutes)
 --------------------------------------------------------------------
 
 nodes :: DecisionTree -> Int
-nodes 
-  = undefined
+nodes Null
+  = 0
+nodes (Leaf _)
+  = 1
+nodes (Node _ classifications)
+  = 1 + foldl1 (+) (map (nodes . snd) classifications)
 
 evalTree :: DecisionTree -> Header -> Row -> AttValue
-evalTree 
-  = undefined
+evalTree Null _ _
+  = ""
+evalTree (Leaf value) _ _
+  = value
+evalTree (Node attribute classifications) header row
+  = evalTree (findSubtree attribute classifications header row) header row
+  where
+    findSubtree attribute classifications header row
+      = (snd . head) $ filter (\entry -> fst entry == lookUpAtt attribute header row) classifications
 
 --------------------------------------------------------------------
 -- PART III
