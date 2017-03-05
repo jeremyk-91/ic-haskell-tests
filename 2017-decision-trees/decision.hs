@@ -108,7 +108,7 @@ nodes Null
 nodes (Leaf _)
   = 1
 nodes (Node _ classifications)
-  = 1 + foldl1 (+) (map (nodes . snd) classifications)
+  = 1 + sum (map (nodes . snd) classifications)
 
 evalTree :: DecisionTree -> Header -> Row -> AttValue
 evalTree Null _ _
@@ -119,7 +119,7 @@ evalTree (Node attribute classifications) header row
   = evalTree findSubtree header row
   where
     findSubtree
-      = (snd . head) $ filter (\entry -> fst entry == lookUpAtt attribute header row) classifications
+      = snd $ head $ filter (\entry -> fst entry == lookUpAtt attribute header row) classifications
 
 --------------------------------------------------------------------
 -- PART III (START 17.14, FINISH 17.54 - 40 minutes)
@@ -165,16 +165,16 @@ augmentPartition ((key, (header, rows)) : classes) queryKey row
 buildTree :: DataSet -> Attribute -> AttSelector -> DecisionTree 
 buildTree (_, []) _ _
   = Null
-buildTree dataset attribute selector
-  = fromMaybe (buildTree' dataset attribute selector) (getDefinitiveLeaf dataset attribute)
+buildTree dataset classifyingAttribute selector
+  = fromMaybe (buildTree' dataset classifyingAttribute selector) (getDefinitiveLeaf dataset classifyingAttribute)
 
 buildTree' :: DataSet -> Attribute -> AttSelector -> DecisionTree
 --This handles the split case
-buildTree' dataset attribute selector
+buildTree' dataset classifyingAttribute selector
   = Node (fst splitAttribute) (map buildSubtrees (partitionData dataset splitAttribute))
   where
-    splitAttribute = (selector dataset attribute)
-    buildSubtrees (value, newDataset) = (value, buildTree newDataset attribute selector)
+    splitAttribute = (selector dataset classifyingAttribute)
+    buildSubtrees (value, newDataset) = (value, buildTree newDataset classifyingAttribute selector)
 
 getDefinitiveLeaf :: DataSet -> Attribute -> Maybe DecisionTree
 --Pre: results is non-empty
@@ -185,20 +185,47 @@ getDefinitiveLeaf (header, rows) (attName, _)
     results = map (lookUpAtt attName header) rows
 
 --------------------------------------------------------------------
--- PART IV
+-- PART IV (START 17.54; ENTROPY 18.13; GAIN 18.26; BEST 18.35)
 --------------------------------------------------------------------
 
 entropy :: DataSet -> Attribute -> Double
-entropy 
-  = undefined
+entropy (_, []) _
+  = 0
+entropy dataset splitAttribute
+  = sum (map (convert . snd) (convertToProbabilities $ buildFrequencyTable splitAttribute dataset))
+  where
+    convert prob = (-1) * xlogx prob
+
+convertToProbabilities :: [(AttValue, Int)] -> [(AttValue, Double)]
+convertToProbabilities frequencies
+  = map (convertToProbability) frequencies
+  where
+    convertToProbability (value, count) = (value, (fromIntegral count) / total)
+    total = fromIntegral (sum (map snd frequencies))
 
 gain :: DataSet -> Attribute -> Attribute -> Double
-gain 
-  = undefined
+gain dataset splitAttribute classifyingAttribute
+  = (entropy dataset classifyingAttribute) - (sum subproducts)
+  where
+    partition = partitionData dataset splitAttribute
+    classEntropies = map (getClassEntropy splitAttribute classifyingAttribute) partition
+    valueProbabilities = map (getValueProbability dataset) partition
+    subproducts = zipWith (*) classEntropies valueProbabilities
 
+getClassEntropy :: Attribute -> Attribute -> (AttValue, DataSet) -> Double
+getClassEntropy _ classifyingAttribute (_, dataset)
+  = entropy dataset classifyingAttribute
+
+getValueProbability :: DataSet -> (AttValue, DataSet) -> Double
+getValueProbability (_, originalRows) (_, (_, newRows))
+  = fromIntegral (length newRows) / fromIntegral (length originalRows)
+
+-- (Dataset -> Attribute -> Attribute.)
 bestGainAtt :: AttSelector
-bestGainAtt 
-  = undefined
+bestGainAtt (header, rows) classifier
+  = snd $ maximum $ map pairWithGain (filter (/= classifier) header)
+  where
+    pairWithGain attribute = (gain (header, rows) attribute classifier, attribute)
 
 --------------------------------------------------------------------
 
