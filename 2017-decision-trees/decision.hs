@@ -70,7 +70,7 @@ addToMapping (key, value) []
   = [(key, [value])]
 addToMapping (key, value) (currEntry : entries)
   | key == fst currEntry = (add value currEntry) : entries
-  | otherwise            = [currEntry] ++ addToMapping (key, value) entries
+  | otherwise            = currEntry : addToMapping (key, value) entries
   where
     add value (entryKey, entryValues) = (entryKey, value : entryValues)
 
@@ -84,19 +84,19 @@ buildFrequencyTable attribute dataset
 partitionOnAtt :: Attribute -> DataSet -> [(AttValue, [Row])]
 --Partitions the dataset into rows on a given attribute
 partitionOnAtt attribute dataset
-  = partitionOnAttAccumulator attribute dataset (initializeAccumulator attribute)
+  = partitionOnAtt' attribute dataset (initializeAccumulator)
   where
-    initializeAccumulator attribute = zip (snd attribute) (repeat [])
+    initializeAccumulator = zip (snd attribute) (repeat [])
 
-partitionOnAttAccumulator :: Attribute -> DataSet -> [(AttValue, [Row])] -> [(AttValue, [Row])]
+partitionOnAtt' :: Attribute -> DataSet -> [(AttValue, [Row])] -> [(AttValue, [Row])]
 --Internal recursive method for partitionOnAtt
-partitionOnAttAccumulator _ (_, []) accumulator
+partitionOnAtt' _ (_, []) accumulator
   = accumulator
-partitionOnAttAccumulator attribute (header, row : rows) accumulator
-  = partitionOnAttAccumulator attribute (header, rows) newAccumulator
+partitionOnAtt' attribute (header, row : rows) accumulator
+  = partitionOnAtt' attribute (header, rows) newAccumulator
   where
-    newAccumulator = addToMapping (constructKey attribute header row) accumulator
-    constructKey attribute header row = (lookUpAtt (fst attribute) header row, row)
+    newAccumulator = addToMapping (newKey) accumulator
+    newKey = (lookUpAtt (fst attribute) header row, row)
 
 --------------------------------------------------------------------
 -- PART II (START 16.59, FINISH 17.14 - 15 minutes)
@@ -116,13 +116,13 @@ evalTree Null _ _
 evalTree (Leaf value) _ _
   = value
 evalTree (Node attribute classifications) header row
-  = evalTree (findSubtree attribute classifications header row) header row
+  = evalTree findSubtree header row
   where
-    findSubtree attribute classifications header row
+    findSubtree
       = (snd . head) $ filter (\entry -> fst entry == lookUpAtt attribute header row) classifications
 
 --------------------------------------------------------------------
--- PART III
+-- PART III (START 17.14, FINISH 17.54 - 40 minutes)
 --------------------------------------------------------------------
 
 --
@@ -137,12 +137,52 @@ nextAtt (header, _) (classifierName, _)
   = head (filter ((/= classifierName) . fst) header)
 
 partitionData :: DataSet -> Attribute -> Partition
-partitionData 
-  = undefined
+partitionData (header, rows) attribute
+  = partitionData' (initializeAccumulator attribute newHeader) (header, rows) attribute
+  where
+    newHeader = remove (fst attribute) header
+    initializeAccumulator attribute header = zip (snd attribute) (repeat (header, []))
+
+partitionData' :: Partition -> DataSet -> Attribute -> Partition
+partitionData' partition (_, []) _
+  = partition
+partitionData' partition (header, row : rows) attribute
+  = partitionData' (augmentedPartition) (header, rows) attribute
+  where
+    partitioningValue = lookUpAtt (fst attribute) header row
+    newRow = removeAtt (fst attribute) header row -- so the row is now compatible
+    augmentedPartition = augmentPartition partition partitioningValue newRow
+
+augmentPartition :: Partition -> AttValue -> Row -> Partition
+--Pre: The row has a format that is consistent with the datasets in the partition.
+--Note slightly awkward line for the query key match case, to preserve ordering.
+augmentPartition [] _ _
+  = error "Attribute value was not part of the initial partition. This is unexpected."
+augmentPartition ((key, (header, rows)) : classes) queryKey row
+  | key == queryKey = (key, (header, rows ++ [row])) : classes
+  | otherwise       = (key, (header, rows)) : augmentPartition classes queryKey row
 
 buildTree :: DataSet -> Attribute -> AttSelector -> DecisionTree 
-buildTree 
-  = undefined
+buildTree (_, []) _ _
+  = Null
+buildTree dataset attribute selector
+  = fromMaybe (buildTree' dataset attribute selector) (getDefinitiveLeaf dataset attribute)
+
+buildTree' :: DataSet -> Attribute -> AttSelector -> DecisionTree
+--This handles the split case
+buildTree' dataset attribute selector
+  = Node (fst splitAttribute) (map buildSubtrees (partitionData dataset splitAttribute))
+  where
+    splitAttribute = (selector dataset attribute)
+    buildSubtrees (value, newDataset) = (value, buildTree newDataset attribute selector)
+
+getDefinitiveLeaf :: DataSet -> Attribute -> Maybe DecisionTree
+--Pre: results is non-empty
+getDefinitiveLeaf (header, rows) (attName, _)
+  | allSame results = Just (Leaf (lookUpAtt attName header (head rows)))
+  | otherwise       = Nothing
+  where
+    results = map (lookUpAtt attName header) rows
 
 --------------------------------------------------------------------
 -- PART IV
