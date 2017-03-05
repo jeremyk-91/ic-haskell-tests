@@ -36,34 +36,67 @@ lookUp x table
               (lookup x table)
 
 --------------------------------------------------------------------
--- PART I
+-- PART I (START 16.21, FINISH 16.59 - 38 minutes)
 --------------------------------------------------------------------
 
+-- Note less than equal to to handle the zero case
 allSame :: Eq a => [a] -> Bool
-allSame 
-  = undefined
+allSame xs 
+  = length (nub xs) <= 1
 
 remove :: Eq a => a -> [(a, b)] -> [(a, b)]
-remove 
-  = undefined
+remove key entries
+  = filter (otherKey) entries
+  where 
+    otherKey entry = fst entry /= key
+
+getHeaderRowPairs :: Header -> Row -> [(AttName, AttValue)]
+--Helper associating table names with elements in a row
+getHeaderRowPairs header row
+  = zip (map fst header) row
 
 lookUpAtt :: AttName -> Header -> Row -> AttValue
 --Pre: The attribute name is present in the given header.
-lookUpAtt
-  = undefined
+lookUpAtt attribute header row
+  = lookUp attribute (getHeaderRowPairs header row)
 
 removeAtt :: AttName -> Header -> Row -> Row
-removeAtt
-  = undefined
+--Note: This is safe, because remove maintains ordering as well
+removeAtt attribute header row
+  = map snd (remove attribute (getHeaderRowPairs header row))
 
 addToMapping :: Eq a => (a, b) -> [(a, [b])] -> [(a, [b])]
-addToMapping
-  = undefined
+addToMapping (key, value) [] 
+  = [(key, [value])]
+addToMapping (key, value) (currEntry : entries)
+  | key == fst currEntry = (add value currEntry) : entries
+  | otherwise            = [currEntry] ++ addToMapping (key, value) entries
+  where
+    add value (entryKey, entryValues) = (entryKey, value : entryValues)
 
 buildFrequencyTable :: Attribute -> DataSet -> [(AttValue, Int)]
 --Pre: Each row of the data set contains an instance of the attribute
-buildFrequencyTable
-  = undefined
+buildFrequencyTable attribute dataset
+  = map takeCounts (partitionOnAtt attribute dataset)
+  where
+    takeCounts (key, values) = (key, length values)
+
+partitionOnAtt :: Attribute -> DataSet -> [(AttValue, [Row])]
+--Partitions the dataset into rows on a given attribute
+partitionOnAtt attribute dataset
+  = partitionOnAttAccumulator attribute dataset (initializeAccumulator attribute)
+  where
+    initializeAccumulator attribute = zip (snd attribute) (repeat [])
+
+partitionOnAttAccumulator :: Attribute -> DataSet -> [(AttValue, [Row])] -> [(AttValue, [Row])]
+--Internal recursive method for partitionOnAtt
+partitionOnAttAccumulator _ (_, []) accumulator
+  = accumulator
+partitionOnAttAccumulator attribute (header, row : rows) accumulator
+  = partitionOnAttAccumulator attribute (header, rows) newAccumulator
+  where
+    newAccumulator = addToMapping (constructKey attribute header row) accumulator
+    constructKey attribute header row = (lookUpAtt (fst attribute) header row, row)
 
 --------------------------------------------------------------------
 -- PART II
