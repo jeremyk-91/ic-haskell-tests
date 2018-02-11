@@ -258,13 +258,12 @@ transform block
   = fst $ transform' block []    
 
 -- Converts a function body to SSA format, by applying rules.
--- Given an expression, converts it into a sequence of single assignments.
--- e.g. (Assign Id (Apply Add (Apply Add (Var x) (Var y)) (Var z)))
---      would become two statements, one for x + y (call this $i), and then
---      one for $i + z.
 transform' :: Block -> UsageMap -> (Block, UsageMap)
 transform' [] map
   = ([], map)
+
+-- Begin with any needed intermediate expressions for the RHS.
+-- Then execute the new assignment, and translate everything else.
 transform' ((Assign id exp):statements) map
   = (intermediates ++ [newAssignment] ++ laterStatements, finalMap)
     where
@@ -272,6 +271,24 @@ transform' ((Assign id exp):statements) map
       (newId, _, map'') = getIdentifier id map'
       newAssignment = Assign newId newExp
       (laterStatements, finalMap) = transform' statements map''
+
+-- If: Begin with any needed intermediate expressions for the condition.
+-- Then, translate both blocks; don't reuse variables on either side.
+-- Keep track of ALL variables that changed at some point ('mod-set').
+-- You can get this from comparing maps.
+-- At the end, assign each variable to PHI of its final value on each branch.
+transform' ((If conditionExp block1 block2):statements) map
+  = (intermediates 
+       ++ [If newCondition block1' block2'] 
+       ++ phiAssignments 
+       ++ laterStatements,
+     finalMap)
+    where
+      (intermediates, newCondition, map') = splitExpression conditionExp map
+      (block1', map'') = transform' block1 map'
+      (block2', map''') = transform' block2 map''
+      (phiAssignments, postPhiMap) = plantIfPhis map' map'' map'''
+      (laterStatements, finalMap) = transform' statements postPhiMap
 
 -- Usage Map for handling new instances of variables
 type UsageMap = [(Id, Int)]
@@ -291,26 +308,32 @@ getIdentifier id (binding:bindings)
     (bindingId, bindingCount) = binding
     (returnedId, returnedCount, returnedBindings) = getIdentifier id bindings
 
-getCurrentVersion :: Id -> UsageMap -> Id
-getCurrentVersion "$return" _
-  = "$return"
+getCurrentVersion :: Id -> UsageMap -> (Id, UsageMap)
+getCurrentVersion "$return" map
+  = ("$return", map)
 getCurrentVersion id []
-  = error "id not defined yet!"
+  = (returnedId, returnedBindings)
+  where
+    (returnedId, _, returnedBindings) = getIdentifier id []
 getCurrentVersion id (binding:bindings)
   | id == bindingId 
-    = id ++ show(bindingCount - 1)
+    = (id ++ show(bindingCount - 1), binding:bindings)
   | otherwise
-    = getCurrentVersion id bindings
+    = (returnedId, returnedBindings)
   where
     (bindingId, bindingCount) = binding
+    (returnedId, returnedBindings) = getCurrentVersion id bindings
 
--- Computes intermediate assignments for a compound expression
+-- Given an expression, converts it into a sequence of single assignments.
+-- e.g. (Assign Id (Apply Add (Apply Add (Var x) (Var y)) (Var z)))
+--      would become two statements, one for x + y (call this $i), and then
+--      one for $i + z.
 -- Pre: No phi functions
 splitExpression :: Exp -> UsageMap -> (Block, Exp, UsageMap)
 splitExpression (Const value) map
   = ([], Const value, map)
 splitExpression (Var id) map
-  = ([], Var (getCurrentVersion id map), map)
+  = ([], Var (fst(getCurrentVersion id map)), map)
 splitExpression (Apply op exp1 exp2) map
   | alreadySSA 
     = let
@@ -328,7 +351,7 @@ storeTemporary :: Exp -> UsageMap -> (Block, Exp, UsageMap)
 storeTemporary (Const value) map
   = ([], Const value, map)
 storeTemporary (Var id) map
-  = ([], Var (getCurrentVersion id map), map)
+  = ([], Var (fst (getCurrentVersion id map)), map)
 storeTemporary (Apply op exp1 exp2) map
   | isSSAAssignable (Apply op exp1 exp2)
     = let
@@ -364,6 +387,51 @@ isSSAAssignable (Var id)
   = True
 isSSAAssignable (Apply op exp1 exp2)
   = isTerminal exp1 && isTerminal exp2
+
+-- Computes all required PHI(v1, v2) values for variables
+plantIfPhis :: UsageMap -> UsageMap -> UsageMap -> (Block, UsageMap)
+plantIfPhis original afterIf afterElse
+  = plantIfPhis' original afterIf afterElse afterElse allChanged
+  where
+    allChanged = union (modset original afterIf) (modset original afterElse)
+
+-- Compute values to be used for PHI for one variable at a time
+plantIfPhis' :: UsageMap -> UsageMap -> UsageMap -> UsageMap -> 
+                [Id] -> (Block, UsageMap)
+plantIfPhis' original afterIf afterElse final []
+  = ([], final)
+plantIfPhis' original afterIf afterElse accumulator (id:ids)
+  = ([Assign newId (Phi (Var varAfterIf) (Var varAfterElse))] ++ otherPhis,
+     final)
+  where
+    oldVersion = lookupWithFailure id original
+    versionAfterIf = lookupWithFailure id afterIf
+    versionAfterElse = lookupWithFailure id afterElse
+    realVersionAfterElse 
+      = if versionAfterIf == versionAfterElse
+        then oldVersion
+        else versionAfterElse
+    varAfterIf = id ++ show(versionAfterIf)
+    varAfterElse = id ++ show(realVersionAfterElse)
+    (newId, _, newMap) = getIdentifier id accumulator
+    (otherPhis, final) 
+      = plantIfPhis' original afterIf afterElse newMap ids
+
+-- Computes the variables that have changed between two usage maps.
+modset :: UsageMap -> UsageMap -> [Id]
+modset _ []
+  = []
+modset before (newBinding:bindings)
+  | changed   = bindingId:(modset before bindings)
+  | otherwise = modset before bindings
+  where
+    (bindingId, bindingVersion) = newBinding
+    oldVersion = lookupWithFailure bindingId before
+    changed = oldVersion /= bindingVersion
+
+lookupWithFailure :: Id -> UsageMap -> Int
+lookupWithFailure id map
+  = fromMaybe (0) (lookup id map) - 1 -- TODO hack
 
 ------------------------------------------------------------------------
 -- Predefined functions for displaying functions and blocks...
