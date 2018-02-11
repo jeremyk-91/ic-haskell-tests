@@ -213,8 +213,29 @@ optimise (name, args, body)
 
 unPhi :: Block -> Block
 -- Pre: the block is in SSA form
-unPhi 
-  = undefined
+unPhi []
+  = []
+
+-- This handles multiple statements, because the pattern will match after
+-- the first statement is removed.
+unPhi ((If exp block1 block2):(Assign id (Phi exp1 exp2)):statements)
+  = unPhi ((If exp block1' block2'):statements)
+    where
+      block1' = block1 ++ [(Assign id exp1)]
+      block2' = block2 ++ [(Assign id exp2)]
+unPhi ((If exp block1 block2):statements)
+  = (If exp (unPhi block1) (unPhi block2)):(unPhi statements)
+
+-- Again this handles multiple statements because the pattern still matches
+-- after the first statement is removed.
+unPhi ((DoWhile ((Assign id (Phi exp1 exp2)):body) conditionExp):statements)
+  = (Assign id exp1):(unPhi ((DoWhile (body ++ [(Assign id exp2)]) conditionExp):statements))
+unPhi ((DoWhile block exp):statements)
+  = (DoWhile (unPhi block) exp):(unPhi statements)
+
+-- Catchall case
+unPhi (statement:statements)
+  = statement:(unPhi statements)
 
 ------------------------------------------------------------------------
 -- Part IV
