@@ -103,23 +103,96 @@ applyPropagate (name, args, body)
 
 foldConst :: Exp -> Exp
 -- Pre: the expression is in SSA form
-foldConst 
-  = undefined
+foldConst (Const val)
+  = Const val
+foldConst (Var id)
+  = Var id
+foldConst (Apply op (Const c1) (Const c2))
+  = Const (apply op c1 c2)
+foldConst (Apply Add (Var id) (Const 0))
+  = Var id
+foldConst (Apply Add (Const 0) (Var id))
+  = Var id
+foldConst (Apply op e1 e2)
+  = Apply op (foldConst e1) (foldConst e2)
+foldConst (Phi (Const c1) (Const c2))
+  | c1 == c2  = Const c1
+  | otherwise = Phi (Const c1) (Const c2)
+foldConst (Phi e1 e2)
+  = Phi (foldConst e1) (foldConst e2)
 
 sub :: Id -> Int -> Exp -> Exp
 -- Pre: the expression is in SSA form
-sub 
-  = undefined
+sub id value exp
+  = foldConst(sub' id value exp)
+
+-- Substitutes a value into an expression, but does not fold constants.
+-- foldConst itself is recursive, so this will suffice.
+sub' :: Id -> Int -> Exp -> Exp
+sub' id value (Var varNodeId)
+  | varNodeId == id = Const value
+  | otherwise       = Var varNodeId
+sub' id value (Const int)
+  = Const int
+sub' id value (Apply op exp1 exp2)
+  = Apply op (sub' id value exp1) (sub' id value exp2)
+sub' id value (Phi exp1 exp2)
+  = Phi (sub' id value exp1) (sub' id value exp2)
 
 -- Use (by uncommenting) any of the following, as you see fit...
--- type Worklist = [(Id, Int)]
--- scan :: Id -> Int -> Block -> (Worklist, Block)
+type Worklist = [(Id, Int)]
+
+scan :: Id -> Int -> Block -> (Worklist, Block)
+scan id value []
+  = ([], [])
+scan id value (statement:statements)
+  = (worklist ++ worklist', block ++ block')
+    where
+      (worklist, block) = processStatement id value statement
+      (worklist', block') = scan id value statements
+
+processStatement :: Id -> Int -> Statement -> (Worklist, Block)
+processStatement id value (Assign statementId statementExp)
+  = processAssign (Assign statementId substitutedExp)
+    where
+      substitutedExp = sub id value statementExp
+processStatement id value (If conditionExp block1 block2)
+  = (worklist1 ++ worklist2, [(If substitutedCondition block1' block2')])
+    where
+      substitutedCondition = sub id value conditionExp
+      (worklist1, block1') = scan id value block1
+      (worklist2, block2') = scan id value block2
+processStatement id value (DoWhile block conditionExp)
+  = (worklist, [(DoWhile block' substitutedCondition)])
+    where
+      substitutedCondition = sub id value conditionExp
+      (worklist, block') = scan id value block
+
+processAssign :: Statement -> (Worklist, Block)
+processAssign (Assign "$return" (Const constValue))
+  = ([], [(Assign "$return" (Const constValue))])
+processAssign (Assign statementId (Const constValue)) 
+  = ([(statementId, constValue)], []) 
+processAssign (Assign statementId statementExp)
+  = ([], [(Assign statementId statementExp)])
+
+-- Function implementation looks fun, but it's a bit spicy
 -- scan :: (Exp -> Exp) -> Block -> (Exp -> Exp, Block)
  
 propagateConstants :: Block -> Block
 -- Pre: the block is in SSA form
-propagateConstants 
-  = undefined
+propagateConstants block 
+  = propagateConstants' (initialWorklist, block)
+    where
+      (initialWorklist, _) = scan "$INVALID" 0 block
+
+propagateConstants' :: (Worklist, Block) -> Block
+propagateConstants' ([], block)
+  = block
+propagateConstants' ((id, value):bindings, block)
+  = propagateConstants' (bindings ++ newBindings, newBlock)
+    where
+      (newBindings, newBlock) = scan id value block 
 
 ------------------------------------------------------------------------
 -- Given functions for testing unPhi...
