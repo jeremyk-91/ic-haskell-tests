@@ -233,7 +233,7 @@ unPhi ((If exp block1 block2):statements)
 -- Again this handles multiple statements because the pattern still matches
 -- after the first statement is removed.
 unPhi ((DoWhile ((Assign id (Phi exp1 exp2)):body) conditionExp):statements)
-  = (Assign id exp1):(unPhi (newDoWhileStatement):statements))
+  = (Assign id exp1):(unPhi ((newDoWhileStatement):statements))
     where
       newDoWhileStatement = DoWhile (body ++ [(Assign id exp2)]) conditionExp
 
@@ -249,9 +249,121 @@ unPhi (statement:statements)
 -- Part IV
 
 makeSSA :: Function -> Function
-makeSSA 
-  = undefined
+makeSSA (name, args, block) 
+  = (name, args, transform block)
 
+-- Converts a function body to SSA format.
+transform :: Block -> Block
+transform block
+  = fst $ transform' block []    
+
+-- Converts a function body to SSA format, by applying rules.
+-- Given an expression, converts it into a sequence of single assignments.
+-- e.g. (Assign Id (Apply Add (Apply Add (Var x) (Var y)) (Var z)))
+--      would become two statements, one for x + y (call this $i), and then
+--      one for $i + z.
+transform' :: Block -> UsageMap -> (Block, UsageMap)
+transform' [] map
+  = ([], map)
+transform' ((Assign id exp):statements) map
+  = (intermediates ++ [newAssignment] ++ laterStatements, finalMap)
+    where
+      (intermediates, newExp, map') = splitExpression exp map
+      (newId, _, map'') = getIdentifier id map'
+      newAssignment = Assign newId newExp
+      (laterStatements, finalMap) = transform' statements map''
+
+-- Usage Map for handling new instances of variables
+type UsageMap = [(Id, Int)]
+
+-- Retrieves a fresh identifier for the given raw variable.
+getIdentifier :: Id -> UsageMap -> (Id, Int, UsageMap)
+getIdentifier "$return" map
+  = ("$return", 0, map)
+getIdentifier id []
+  = (id ++ "0", 0, [(id, 1)])
+getIdentifier id (binding:bindings)
+  | id == bindingId 
+    = (id ++ show(bindingCount), bindingCount, (id, bindingCount + 1):bindings)
+  | otherwise       
+    = (returnedId, returnedCount, binding:returnedBindings)
+  where
+    (bindingId, bindingCount) = binding
+    (returnedId, returnedCount, returnedBindings) = getIdentifier id bindings
+
+getCurrentVersion :: Id -> UsageMap -> Id
+getCurrentVersion "$return" _
+  = "$return"
+getCurrentVersion id []
+  = error "id not defined yet!"
+getCurrentVersion id (binding:bindings)
+  | id == bindingId 
+    = id ++ show(bindingCount - 1)
+  | otherwise
+    = getCurrentVersion id bindings
+  where
+    (bindingId, bindingCount) = binding
+
+-- Computes intermediate assignments for a compound expression
+-- Pre: No phi functions
+splitExpression :: Exp -> UsageMap -> (Block, Exp, UsageMap)
+splitExpression (Const value) map
+  = ([], Const value, map)
+splitExpression (Var id) map
+  = ([], Var (getCurrentVersion id map), map)
+splitExpression (Apply op exp1 exp2) map
+  | alreadySSA 
+    = let
+        (_, newExp1, _) = splitExpression exp1 map
+        (_, newExp2, _) = splitExpression exp2 map
+      in
+        ([], Apply op newExp1 newExp2, map)
+  | otherwise  
+    = storeTemporary (Apply op exp1 exp2) map
+  where
+    alreadySSA = (isTerminal exp1) && (isTerminal exp2)
+
+-- Pre: Expression is SSA assignable.
+storeTemporary :: Exp -> UsageMap -> (Block, Exp, UsageMap)
+storeTemporary (Const value) map
+  = ([], Const value, map)
+storeTemporary (Var id) map
+  = ([], Var (getCurrentVersion id map), map)
+storeTemporary (Apply op exp1 exp2) map
+  | isSSAAssignable (Apply op exp1 exp2)
+    = let
+        internalId = "$internal"
+        (newId, _, map') = getIdentifier internalId map
+        (_, newExp1, _) = splitExpression exp1 map
+        (_, newExp2, _) = splitExpression exp2 map
+      in
+        ([Assign newId (Apply op exp1 exp2)], Var newId, map')
+  | otherwise
+    = let
+        (assignments1, newExp1, map') = storeTemporary exp1 map
+        (assignments2, newExp2, map'') = storeTemporary exp2 map'
+      in
+        (assignments1 ++ assignments2, (Apply op newExp1 newExp2), map'')
+
+-- Determines whether an expression is 'terminal' - that is, whether it is
+-- merely a Const or Var, or a single operator application to Consts/Vars.
+isTerminal :: Exp -> Bool
+isTerminal (Const value) 
+  = True
+isTerminal (Var id) 
+  = True
+isTerminal _ 
+  = False
+
+-- Determines whether an expression is permissible as the RHS of an assignment
+-- in SSA.
+isSSAAssignable :: Exp -> Bool
+isSSAAssignable (Const value) 
+  = True
+isSSAAssignable (Var id) 
+  = True
+isSSAAssignable (Apply op exp1 exp2)
+  = isTerminal exp1 && isTerminal exp2
 
 ------------------------------------------------------------------------
 -- Predefined functions for displaying functions and blocks...
