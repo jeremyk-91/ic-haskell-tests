@@ -36,26 +36,59 @@ execFun (name, args, p) vs
 type State = [(Id, Int)]
 
 update :: (Id, Int) -> State -> State
-update 
-  = undefined
+update (id, newValue) []
+  = [(id, newValue)]
+update (id, newValue) (kvPair:otherKvPairs)
+  | key == id = (id, newValue):otherKvPairs
+  | otherwise = [kvPair] ++ (update (id, newValue) otherKvPairs)
+  where (key, other) = kvPair
 
 apply :: Op -> Int -> Int -> Int
-apply 
-  = undefined
+apply Add x y
+  = x + y
+apply Mul x y
+  = x * y
+apply Eq x y
+  | x == y    = 1
+  | otherwise = 0
+apply Gtr x y
+  | x > y     = 1
+  | otherwise = 0
 
 eval :: Exp -> State -> Int
 -- Pre: the variables in the expression will all be bound in the given state 
 -- Pre: expressions do not contain phi instructions
-eval 
-  = undefined
+eval (Const value) _
+  = value
+eval (Var key) state
+  = lookUp key state
+eval (Apply op exp1 exp2) state
+  = apply op (eval exp1 state) (eval exp2 state)
+eval (Phi e1 e2) state
+  = error "Unexpected phi instruction in eval!"
 
 execStatement :: Statement -> State -> State
-execStatement 
-  = undefined
+execStatement (Assign id exp) state
+  = update (id, newVal) state
+    where newVal = eval exp state
+execStatement (If conditionExp block1 block2) state
+  | conditionValue == 1 = execBlock block1 state
+  | conditionValue == 0 = execBlock block2 state
+  | otherwise           = error "Condition evaluated to a non-0 or 1 value."
+  where conditionValue = eval conditionExp state
+execStatement (DoWhile block conditionExp) state
+  | rerun == 1 = execStatement (DoWhile block conditionExp) state'
+  | rerun == 0 = state'
+  | otherwise  = error "Condition evaluated to a non-0 or 1 value."
+  where state' = execBlock block state
+        rerun  = eval conditionExp state' -- condition checked after loop
 
 execBlock :: Block -> State -> State
-execBlock 
-  = undefined
+execBlock [] state
+  = state
+execBlock (statement:statements) state
+  = execBlock statements state'
+    where state' = execStatement statement state
 
 ------------------------------------------------------------------------
 -- Given function for testing propagateConstants...
