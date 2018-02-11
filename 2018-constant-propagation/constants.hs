@@ -38,10 +38,10 @@ type State = [(Id, Int)]
 update :: (Id, Int) -> State -> State
 update (id, newValue) []
   = [(id, newValue)]
-update (id, newValue) (kvPair:otherKvPairs)
-  | key == id = (id, newValue):otherKvPairs
-  | otherwise = [kvPair] ++ (update (id, newValue) otherKvPairs)
-  where (key, other) = kvPair
+update (id, newValue) (binding:bindings)
+  | key == id = (id, newValue):bindings
+  | otherwise = [binding] ++ (update (id, newValue) bindings)
+  where (key, _) = binding
 
 apply :: Op -> Int -> Int -> Int
 apply Add x y
@@ -169,6 +169,8 @@ processStatement id value (DoWhile block conditionExp)
       (worklist, block') = scan id value block
 
 processAssign :: Statement -> (Worklist, Block)
+-- Special case. No use in adding $return to the work-list, since it
+-- isn't used anywhere.
 processAssign (Assign "$return" (Const constValue))
   = ([], [(Assign "$return" (Const constValue))])
 processAssign (Assign statementId (Const constValue)) 
@@ -223,13 +225,19 @@ unPhi ((If exp block1 block2):(Assign id (Phi exp1 exp2)):statements)
     where
       block1' = block1 ++ [(Assign id exp1)]
       block2' = block2 ++ [(Assign id exp2)]
+
+-- Need to propagate (because of possibility of nested blocks)
 unPhi ((If exp block1 block2):statements)
   = (If exp (unPhi block1) (unPhi block2)):(unPhi statements)
 
 -- Again this handles multiple statements because the pattern still matches
 -- after the first statement is removed.
 unPhi ((DoWhile ((Assign id (Phi exp1 exp2)):body) conditionExp):statements)
-  = (Assign id exp1):(unPhi ((DoWhile (body ++ [(Assign id exp2)]) conditionExp):statements))
+  = (Assign id exp1):(unPhi (newDoWhileStatement):statements))
+    where
+      newDoWhileStatement = DoWhile (body ++ [(Assign id exp2)]) conditionExp
+
+-- Need to propagate (because of possibility of nested blocks)
 unPhi ((DoWhile block exp):statements)
   = (DoWhile (unPhi block) exp):(unPhi statements)
 
