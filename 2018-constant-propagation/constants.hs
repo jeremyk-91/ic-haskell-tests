@@ -290,6 +290,14 @@ transform' ((If conditionExp block1 block2):statements) map
       (phiAssignments, postPhiMap) = plantIfPhis map' map'' map'''
       (laterStatements, finalMap) = transform' statements postPhiMap
 
+-- Do/While: Each target of an assignment in the loop body must get a
+-- PHI in the beginning, to the value at the end of the loop or the
+-- value before entering the loop in the first place.
+-- The while condition is evaluated with the mapping after processing the-
+-- loop body.
+transform' ((While block conditionExp):statements) map
+  = undefined -- TODO timeout
+
 -- Usage Map for handling new instances of variables
 type UsageMap = [(Id, Int)]
 
